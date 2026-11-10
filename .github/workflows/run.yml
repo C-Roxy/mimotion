@@ -5,6 +5,9 @@ on:
     - cron: '51 10,12,14 * * *'
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -13,29 +16,35 @@ jobs:
       - name: Checkout codes
         uses: actions/checkout@v5
         with:
-          token: ${{ secrets.PAT }} #此处PAT需要申请，教程详见：README
+          persist-credentials: false
       - name: Update system and install zsh
         run: |
           sudo -E apt-get -qq update
           sudo -E apt-get install zsh -y
-          
+
       - name: 初始化Python
         uses: actions/setup-python@v6
         with:
           python-version: "3.10"
-          
-      - name: 开始
-        env:
-            CONFIG: ${{ secrets.CONFIG }}
-            AES_KEY: ${{ secrets.AES_KEY }}
-        run: |
-          pip3 install -r requirements.txt
-          python3 main.py
 
-      - name: persist tokens
+      - name: 安装依赖
+        run: pip3 install -r requirements.txt
+
+      - name: 开始
+        shell: bash
+        env:
+          CONFIG: ${{ secrets.CONFIG }}
         run: |
-          git config user.name github-actions
-          git config user.email github-actions@users.noreply.github.com
-          git add .
-          git commit -m "persist tokens trigger by ${{ github.event_name }}"
-          git push origin master
+          # 仅公开账号统计，避免输出设备标识、接口响应和异常详情。
+          run_log=$(mktemp "$RUNNER_TEMP/mimotion.XXXXXX")
+          trap 'rm -f "$run_log"' EXIT
+          if ! python3 main.py > "$run_log" 2>&1; then
+            echo "::error::脚本未能完成，请检查 CONFIG 的 JSON 格式、账号字段和步数范围。"
+            exit 1
+          fi
+          summary=$(grep -m1 -Ex '执行账号总数[0-9]+，成功：[0-9]+，失败：[0-9]+' "$run_log" || true)
+          printf "%s\n" "$summary"
+          if [[ ! "$summary" =~ 成功：[1-9][0-9]*， ]]; then
+            echo "::error::本次没有确认成功的步数更新，请检查 Zepp Life 账号配置或服务状态。"
+            exit 1
+          fi
